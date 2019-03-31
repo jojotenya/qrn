@@ -1,5 +1,6 @@
 import json
 import os
+import pandas as pd
 import shutil
 from pprint import pprint
 
@@ -14,6 +15,10 @@ flags = tf.app.flags
 # File directories
 flags.DEFINE_string("model_name", "babi", "Model name. This will be used for save, log, and eval names. [parallel]")
 flags.DEFINE_string("data_dir", "data/babi", "Data directory [data/babi]")
+flags.DEFINE_string("eval_dir", "", "Evaluation data directory")
+flags.DEFINE_string("log_dir", "", "log data directory")
+flags.DEFINE_string("save_dir", "", "save data directory")
+flags.DEFINE_string("model_dir", "", "if not empty, it'll be the path the model loaded from")
 
 # Training parameters
 # These affect result performance
@@ -24,6 +29,7 @@ flags.DEFINE_float("init_lr", 0.5, "Initial learning rate [0.5]")
 flags.DEFINE_integer("lr_anneal_period", 100, "Anneal period [100]")
 flags.DEFINE_float("lr_anneal_ratio", 0.5, "Anneal ratio [0.5")
 flags.DEFINE_integer("num_epochs", 500, "Total number of epochs for training [100]")
+flags.DEFINE_boolean("reset_epochs", False, "reset epoch variable to 0")
 flags.DEFINE_string("opt", 'adagrad', 'Optimizer: basic | adagrad | adam [basic]')
 flags.DEFINE_float("wd", 0.001, "Weight decay [0.001]")
 flags.DEFINE_integer("max_grad_norm", 0, "Max grad norm. 0 for no clipping [0]")
@@ -54,6 +60,7 @@ flags.DEFINE_boolean("draft", False, "Draft? (quick initialize) [False]")
 
 # App-specific options
 # TODO : Any other options
+flags.DEFINE_integer("which_model", 0, "Task number that the model had trained on.")
 flags.DEFINE_string("task", "all", "Task number. [all]")
 flags.DEFINE_bool("large", False, "1k (False) | 10k (True) [False]")
 flags.DEFINE_string("lang", "en", "en | something")
@@ -70,6 +77,17 @@ flags.DEFINE_boolean("use_res", False, "Use residual connection?")
 flags.DEFINE_boolean("use_dropout",  False, "Use dropout?")
 flags.DEFINE_boolean("use_random", False, "Use random init_lr")
 
+# Meta data
+flags.DEFINE_integer("vocab_size", 0, "vocabulary size")
+flags.DEFINE_integer("max_fact_size", 0, "max fact size")
+flags.DEFINE_integer("max_ques_size", 0, "max ques size")
+flags.DEFINE_integer("max_hypo_size", 0, "max hypo size")
+flags.DEFINE_integer("max_sent_size", 0, "max sent size")
+flags.DEFINE_integer("max_num_sents", 0, "max num sents")
+flags.DEFINE_integer("max_num_sups", 0, "max num sups")
+flags.DEFINE_integer("eos_idx", 0, "eos index")
+flags.DEFINE_integer("mem_size", 0, "mem size")
+
 FLAGS = flags.FLAGS
 
 
@@ -84,30 +102,39 @@ def mkdirs(config, trial_idx):
     if not os.path.exists(saves_dir):
         os.mkdir(saves_dir)
 
-    model_name = config.model_name
-    config_id = str(config.config_id).zfill(2)
-    run_id = str(config.run_id).zfill(2)
+    model_name = config.model_name.value
+    config_id = str(config.config_id.value).zfill(2)
+    run_id = str(config.run_id.value).zfill(2)
     trial_idx = str(trial_idx).zfill(2)
-    task = config.task.zfill(2)
-    mid = config.lang
-    if config.large:
+    task = config.task.value.zfill(2)
+    mid = config.lang.value
+    if config.large.value:
         mid += "-10k"
     subdir_name = "-".join([task, config_id, run_id, trial_idx])
 
     eval_dir = os.path.join(evals_dir, model_name, mid)
     eval_subdir = os.path.join(eval_dir, subdir_name)
-    log_dir = os.path.join(logs_dir, model_name, mid)
+    log_dir = config.log_dir.value
+    if len(log_dir) > 0:
+        log_dir = os.path.join(logs_dir, model_name, log_dir)
+    else:
+        log_dir = os.path.join(logs_dir, model_name, mid)
     log_subdir = os.path.join(log_dir, subdir_name)
-    save_dir = os.path.join(saves_dir, model_name, mid)
-    save_subdir = os.path.join(save_dir, subdir_name)
-    config.eval_dir = eval_subdir
-    config.log_dir = log_subdir
-    config.save_dir = save_subdir
+    save_dir = config.save_dir.value
+    if len(save_dir) == 0:
+        save_dir = os.path.join(saves_dir, model_name, mid)
+        save_subdir = os.path.join(save_dir, subdir_name)
+    else:
+        save_subdir = save_dir 
+    # saves/babi/en
+    config.eval_dir.value = eval_subdir
+    config.log_dir.value = log_subdir
+    config.save_dir.value = save_subdir
 
     if not os.path.exists(eval_dir):
         os.makedirs(eval_dir)
     if os.path.exists(eval_subdir):
-        if config.train and not config.load:
+        if config.train.value and not config.load.value:
             shutil.rmtree(eval_subdir)
             os.mkdir(eval_subdir)
     else:
@@ -115,16 +142,16 @@ def mkdirs(config, trial_idx):
     if not os.path.exists(log_dir):
         os.makedirs(log_dir)
     if os.path.exists(log_subdir):
-        if config.train and not config.load:
+        if config.train.value and not config.load.value:
             shutil.rmtree(log_subdir)
             os.mkdir(log_subdir)
     else:
         os.makedirs(log_subdir)
-    if config.train:
+    if config.train.value:
         if not os.path.exists(save_dir):
             os.makedirs(save_dir)
         if os.path.exists(save_subdir):
-            if not config.load:
+            if not config.load.value:
                 shutil.rmtree(save_subdir)
                 os.mkdir(save_subdir)
         else:
@@ -132,20 +159,20 @@ def mkdirs(config, trial_idx):
 
 
 def load_metadata(config):
-    data_dir = os.path.join(config.data_dir, config.lang + ("-10k" if config.large else ""))
-    metadata_path = os.path.join(data_dir, config.task.zfill(2), "metadata.json")
+    data_dir = os.path.join(config.data_dir.value, config.lang.value + ("-10k" if config.large.value else ""))
+    metadata_path = os.path.join(data_dir, config.task.value.zfill(2), "metadata.json")
     metadata = json.load(open(metadata_path, "r"))
 
     # TODO: set other parameters, e.g.
     # config.max_sent_size = meta_data['max_sent_size']
-    config.max_fact_size = metadata['max_fact_size']
-    config.max_ques_size = metadata['max_ques_size']
-    config.max_sent_size = metadata['max_sent_size']
-    config.vocab_size = metadata['vocab_size']
-    config.max_num_sents = metadata['max_num_sents']
-    config.max_num_sups = metadata['max_num_sups']
-    config.eos_idx = metadata['eos_idx']
-    config.mem_size = min(config.max_num_sents, config.max_mem_size)
+    config.max_fact_size.value = metadata['max_fact_size']
+    config.max_ques_size.value = metadata['max_ques_size']
+    config.max_sent_size.value = metadata['max_sent_size']
+    config.vocab_size.value = metadata['vocab_size']
+    config.max_num_sents.value = metadata['max_num_sents']
+    config.max_num_sups.value = metadata['max_num_sups']
+    config.eos_idx.value = metadata['eos_idx']
+    config.mem_size.value = min(config.max_num_sents.value, config.max_mem_size.value)
 
 
 def main(_):
@@ -165,19 +192,19 @@ def main(_):
             configs_path = os.path.join(this_dir, "configs_new%s" % FLAGS.config_ext)
             config = get_config_from_file(FLAGS.__flags, configs_path, config_id)
         
-        if config.task == "all":
+        if config.task.value == "all":
             tasks = list(map(str, range(1, 21)))
-        elif config.task == 'trouble':
+        elif config.task.value == 'trouble':
             tasks = list(map(str, [18,19]))
-        elif config.task == 'strange' :
+        elif config.task.value == 'strange' :
             tasks = list(map(str, [4,5]))
         else:
-            tasks = [config.task]
+            tasks = [config.task.value]
         for task in tasks:
             # FIXME : this is bad way of setting task each time
-            config.task = task
+            config.task.value = task
             print("=" * 80)
-            print("Config ID {}, task {}, {} trials".format(config.config_id, config.task, num_trials))
+            print("Config ID {}, task {}, {} trials".format(config.config_id.value, config.task.value, num_trials))
             summary = _main(config, num_trials)
             summaries.append(summary)
 	
@@ -191,23 +218,25 @@ def _main(config, num_trials):
     load_metadata(config)
 
     # Load data
-    if config.train:
-        comb_train_ds = read_data(config, 'train', config.task)
-        comb_dev_ds = read_data(config, 'dev', config.task)
-    test_task = config.task if not config.task == 'joint' else 'all'
+    if config.train.value:
+        comb_train_ds = read_data(config, 'train', config.task.value)
+        comb_dev_ds = read_data(config, 'dev', config.task.value)
+    test_task = config.task.value if not config.task.value == 'joint' else 'all'
     comb_test_ds = read_data(config, 'test', test_task)
 
     # For quick draft initialize (deubgging).
-    if config.draft:
-        config.train_num_batches = 1
-        config.val_num_batches = 1
-        config.test_num_batches = 1
-        config.num_epochs = 2
-        config.val_period = 1
-        config.save_period = 1
+    if config.draft.value:
+        config.train_num_batches.value = 1
+        config.val_num_batches.value = 1
+        config.test_num_batches.value = 1
+        config.num_epochs.value = 2
+        config.val_period.value = 1
+        config.save_period.value = 1
         # TODO : Add any other parameter that induces a lot of computations
 
-    pprint(config.__dict__)
+    for k,v in config.__dict__.items():
+        print("%s: %s"%(k,v.value))
+    print("="*20)
 
     # TODO : specify eval tensor names to save in evals folder
     eval_tensor_names = ['a', 'rf', 'rb', 'correct', 'yp']
@@ -225,33 +254,37 @@ def _main(config, num_trials):
     val_accs = []
     test_accs = []
     for trial_idx in range(1, num_trials+1):
-        if config.train:
+        if config.train.value:
             print("-" * 80)
-            print("Task {} trial {}".format(config.task, trial_idx))
+            print("Task {} trial {}".format(config.task.value, trial_idx))
         mkdirs(config, trial_idx)
         graph = tf.Graph()
         # TODO : initialize BaseTower-subclassed objects
-        towers = [Tower(config) for _ in range(config.num_devices)]
+        towers = [Tower(config) for _ in range(config.num_devices.value)]
         sess = tf.Session(graph=graph, config=tf.ConfigProto(allow_soft_placement=True))
         # TODO : initialize BaseRunner-subclassed object
+        wl = config.write_log.value
+        if not config.train.value:
+            config.write_log.value = False
         runner = Runner(config, sess, towers)
         with graph.as_default(), tf.device("/cpu:0"):
             runner.initialize()
-            if config.train:
-                if config.load:
+            config.write_log.value = wl 
+            if config.train.value:
+                if config.load.value:
                     runner.load()
-                val_loss, val_acc = runner.train(comb_train_ds, config.num_epochs, val_data_set=comb_dev_ds,
-                                                 num_batches=config.train_num_batches,
-                                                 val_num_batches=config.val_num_batches, eval_ph_names=eval_ph_names)
+                val_loss, val_acc = runner.train(comb_train_ds, config.num_epochs.value, val_data_set=comb_dev_ds,
+                                                 num_batches=config.train_num_batches.value,
+                                                 val_num_batches=config.val_num_batches.value, eval_ph_names=eval_ph_names)
                 val_losses.append(val_loss)
                 val_accs.append(val_acc)
             else:
                 runner.load()
             test_loss, test_acc = runner.eval(comb_test_ds, eval_tensor_names=eval_tensor_names,
-                                   num_batches=config.test_num_batches, eval_ph_names=eval_ph_names)
+                                   num_batches=config.test_num_batches.value, eval_ph_names=eval_ph_names)
             test_accs.append(test_acc)
 
-        if config.train:
+        if config.train.value:
             best_trial_idx = get_best_trial_idx_with_acc(val_accs)
             print("-" * 80)
             print("Num trials: {}".format(trial_idx))
@@ -264,7 +297,20 @@ def _main(config, num_trials):
             break
 
     best_trial_idx = get_best_trial_idx_with_acc(test_accs)
-    summary = "Task {}: {:.2f}% at trial {}".format(config.task, test_accs[best_trial_idx] * 100, best_trial_idx)
+    summary = "Task {}: {:.2f}% at trial {}".format(config.task.value, test_accs[best_trial_idx] * 100, best_trial_idx)
+
+    if config.which_model.value == 0:
+        config.which_model.value = config.task.value
+    if config.write_log.value:
+        test_acc_path = os.path.join(config.log_dir.value,"test_acc.csv")
+        if os.path.exists(test_acc_path):
+            test_acc_log = pd.read_csv(test_acc_path)
+            test_acc_log = test_acc_log.append({"model":config.which_model.value,"acc":test_accs[best_trial_idx]},ignore_index=True)
+        else:
+            test_acc_log = pd.DataFrame([{"model":config.which_model.value,"acc":test_accs[best_trial_idx]}])
+        test_acc_log = test_acc_log[["model","acc"]]
+        test_acc_log.to_csv(test_acc_path,index=False)
+
     return summary
 
 

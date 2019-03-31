@@ -42,7 +42,7 @@ class BaseRunner(object):
         self.tensors['epoch'] = epoch
 
         learning_rate = tf.placeholder('float32', name='learning_rate')
-        summaries.append(tf.scalar_summary("learning_rate", learning_rate))
+        summaries.append(tf.summary.scalar("learning_rate", learning_rate))
         self.placeholders['learning_rate'] = learning_rate
 
         if params.opt == 'basic':
@@ -72,8 +72,8 @@ class BaseRunner(object):
                         grads_pairs_dict[key].append(grads_pair)
 
         with tf.name_scope("gpu_sync"):
-            loss_tensor = tf.reduce_mean(tf.pack(loss_tensors), 0, name='loss')
-            correct_tensor = tf.concat(0, correct_tensors, name="correct")
+            loss_tensor = tf.reduce_mean(tf.stack(loss_tensors), 0, name='loss')
+            correct_tensor = tf.concat(correct_tensors, 0, name="correct")
             with tf.name_scope("average_gradients"):
                 grads_pair_dict = {key: average_gradients(grads_pairs)
                                    for key, grads_pairs in grads_pairs_dict.items()}
@@ -84,15 +84,15 @@ class BaseRunner(object):
 
         self.tensors['loss'] = loss_tensor
         self.tensors['correct'] = correct_tensor
-        summaries.append(tf.scalar_summary(loss_tensor.op.name, loss_tensor))
+        summaries.append(tf.summary.scalar(loss_tensor.op.name, loss_tensor))
 
         for key, grads_pair in grads_pair_dict.items():
             for grad, var in grads_pair:
                 if grad is not None:
-                    summaries.append(tf.histogram_summary(var.op.name+'/gradients/'+key, grad))
+                    summaries.append(tf.summary.histogram(var.op.name+'/gradients/'+key, grad))
 
         for var in tf.trainable_variables():
-            summaries.append(tf.histogram_summary(var.op.name, var))
+            summaries.append(tf.summary.histogram(var.op.name, var))
 
         apply_grads_op_dict = {key: opt.apply_gradients(grads_pair, global_step=global_step)
                                for key, grads_pair in grads_pair_dict.items()}
@@ -103,12 +103,12 @@ class BaseRunner(object):
         saver = tf.train.Saver(tf.all_variables())
         self.saver = saver
 
-        summary_op = tf.merge_summary(summaries)
+        summary_op = tf.summary.merge(summaries)
         self.tensors['summary'] = summary_op
 
         init_op = tf.initialize_all_variables()
         sess.run(init_op)
-        self.writer = tf.train.SummaryWriter(params.log_dir, sess.graph)
+        self.writer = tf.summary.FileWriter(params.log_dir, sess.graph)
         self.initialized = True
 
     def _get_feed_dict(self, batches, mode, **kwargs):

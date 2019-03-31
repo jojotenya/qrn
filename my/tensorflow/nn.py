@@ -60,7 +60,7 @@ def linear(args, output_size, bias, bias_start=0.0, name='', scope=None, var_on_
             matrix = vs.get_variable("Matrix"+name, [total_arg_size, output_size], initializer=initializer)
 
         if wd:
-            weight_decay = tf.mul(tf.nn.l2_loss(matrix), wd, name='weight_loss'+name)
+            weight_decay = tf.multiply(tf.nn.l2_loss(matrix), wd, name='weight_loss'+name)
             tf.add_to_collection('losses', weight_decay)
 	
 	# Modify for Feature Matching
@@ -77,13 +77,13 @@ def linear(args, output_size, bias, bias_start=0.0, name='', scope=None, var_on_
                 f_ = tf.gather(f, i) # [1 * N * A]
                 res += tf.transpose(tf.mul(h2_, tf.transpose(f_)))
         elif state is not None:
-            h = tf.concat(1, [args[0], tf.cast(state, 'float32')]) # [D+A]
+            h = tf.concat([args[0], tf.cast(state, 'float32')], 1) # [D+A]
             res = math_ops.matmul(h, matrix) # [N * A]
         else:
             if len(args) == 1:
             	res = math_ops.matmul(args[0], matrix)
             else:
-            	res = math_ops.matmul(array_ops.concat(1, args), matrix)
+            	res = math_ops.matmul(array_ops.concat(args,1), matrix)
 
         if not bias:
             res = tf.reshape(res, res_shape, name='out'+name)

@@ -92,10 +92,10 @@ class ReductionLayer(object):
             L = tf.tile(tf.expand_dims(L, 0), [N, 1, 1])
             sL = tf.tile(tf.expand_dims(sL, 0), [N, 1, 1])
             logb = tf.log(b + 1e-9)
-            logb = tf.concat(1, [tf.zeros([N, 1, 1]), tf.slice(logb, [0, 1, 0], [-1, -1, -1])])
-            left = L * tf.exp(tf.batch_matmul(L, logb * sL))  # [N, M, M]
+            logb = tf.concat([tf.zeros([N, 1, 1]), tf.slice(logb, [0, 1, 0], [-1, -1, -1])], 1)
+            left = L * tf.exp(tf.matmul(L, logb * sL))  # [N, M, M]
             right = a * u_t  # [N, M, d]
-            u = tf.batch_matmul(left, right)  # [N, M, d]
+            u = tf.matmul(left, right)  # [N, M, d]
         return u
 
 
@@ -123,12 +123,12 @@ class VectorReductionLayer(object):
             L = tf.tile(tf.expand_dims(tf.expand_dims(L, 0), 0), [N, d, 1, 1])
             sL = tf.tile(tf.expand_dims(tf.expand_dims(sL, 0), 0), [N, d, 1, 1])
             logb = tf.log(b + 1e-9)  # [N, M, d]
-            logb = tf.concat(1, [tf.zeros([N, 1, d]), tf.slice(logb, [0, 1, 0], [-1, -1, -1])])  # [N, M, d]
+            logb = tf.concat([tf.zeros([N, 1, d]), tf.slice(logb, [0, 1, 0], [-1, -1, -1])], 1)  # [N, M, d]
             logb = tf.expand_dims(tf.transpose(logb, [0, 2, 1]), -1)  # [N, d, M, 1]
-            left = L * tf.exp(tf.batch_matmul(L, logb * sL))  # [N, d, M, M]
+            left = L * tf.exp(tf.matmul(L, logb * sL))  # [N, d, M, M]
             right = a * u_t  # [N, M, d]
             right = tf.expand_dims(tf.transpose(right, [0, 2, 1]), -1)  # [N, d, M, 1]
-            u = tf.batch_matmul(left, right)  # [N, d, M, 1]
+            u = tf.matmul(left, right)  # [N, d, M, 1]
             u = tf.transpose(tf.squeeze(u, [3]), [0, 2, 1])  # [N, M, d]
         return u
 
@@ -222,8 +222,10 @@ class Tower(BaseTower):
                     h = reg_layer(u_t, a, 1.0-a, scope='h')
                     if layer_idx + 1 < L:
                         if params.use_reset:
-                            rf, rb = tf.split(2, 2, tf.cast(gate_mask, 'float') *
-                                tf.sigmoid(linear([prev_u * m], 2 * gate_size, True, initializer=initializer, wd=wd, scope='r')))
+                            #rf, rb = tf.split(2, 2, tf.cast(gate_mask, 'float') *
+                            #    tf.sigmoid(linear([prev_u * m], 2 * gate_size, True, initializer=initializer, wd=wd, scope='r')))
+                            rf, rb = tf.split(tf.cast(gate_mask, 'float') *
+                                tf.sigmoid(linear([prev_u * m], 2 * gate_size, True, initializer=initializer, wd=wd, scope='r')), 2, 2)
                         else:
                             rf = rb = tf.ones(a.get_shape().as_list())
                         u_t_rev = tf.reverse_sequence(u_t, m_length, 1)
@@ -242,9 +244,9 @@ class Tower(BaseTower):
 
             h_last = tf.squeeze(tf.slice(h, [0, M-1, 0], [-1, -1, -1]), [1])  # [N, d]
             hs_last = [tf.squeeze(tf.slice(each, [0, M-1, 0], [-1, -1, -1]), [1]) for each in hs]
-            a = tf.transpose(tf.pack(as_, name='a'), [1, 0, 2, 3])
-            rf = tf.transpose(tf.pack(rfs, name='rf'), [1, 0, 2, 3])
-            rb = tf.transpose(tf.pack(rbs, name='rb'), [1, 0, 2, 3])
+            a = tf.transpose(tf.stack(as_, name='a'), [1, 0, 2, 3])
+            rf = tf.transpose(tf.stack(rfs, name='rf'), [1, 0, 2, 3])
+            rb = tf.transpose(tf.stack(rbs, name='rb'), [1, 0, 2, 3])
             tensors['a'] = a
             tensors['rf'] = rf
             tensors['rb'] = rb
@@ -304,7 +306,7 @@ class Tower(BaseTower):
             for i in range(self.num_ans):
                 yp_each = tf.cast(tf.expand_dims(tf.argmax(logits[i], 1), 1), 'int32')
                 if i == 0: yp = yp_each
-                else: yp = tf.concat(1, [yp, yp_each])
+                else: yp = tf.concat([yp, yp_each], 1)
 	    
             correct_ = tf.cast(tf.equal(yp, y), 'float')
             correct_sum = tf.reduce_sum(correct_ * tf.cast(y_mask, 'float'), 1)
@@ -328,7 +330,7 @@ class Tower(BaseTower):
 
                 for i in range(self.num_ans):
                     _y = tf.gather(tf.transpose(y), i)
-                    ce = tf.nn.sparse_softmax_cross_entropy_with_logits(logits[i], _y)
+                    ce = tf.nn.sparse_softmax_cross_entropy_with_logits(logits=logits[i], labels=_y)
                     m = tf.cast(tf.gather(tf.transpose(y_mask), i), 'float32')
                     tot_ce += tf.reduce_sum(ce*m, name='avg_ce')
 

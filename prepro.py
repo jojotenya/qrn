@@ -33,9 +33,24 @@ def get_args():
     parser.add_argument("--task", default="1")
     parser.add_argument("--large", type=bool_, default=False)
     parser.add_argument("--dev_ratio", type=float, default=0.1)
+    parser.add_argument("--share_words", type=bool_, default=False)
     args = parser.parse_args()
     return args
 
+def collect_all_words(tasks,source_dir,target_dir,lang,is_large):
+    train_raw_data_list = []
+    test_raw_data_list = []
+    for task in tasks:
+        target_parent_dir = os.path.join(target_dir, lang + ("-10k" if is_large else ""), task.zfill(2))
+        train_size, test_size = 0, 0
+
+        source_train_path, source_test_path = _get_source_paths(source_dir, lang, is_large, task)
+        #_get_data ==> [paragraphs, questions, supports, answers, hypos, tasks]
+        train_raw_data_list.append(_get_data(source_train_path, task))
+        test_raw_data_list.append(_get_data(source_test_path, task))
+    raw_data = [list(itertools.chain(*each)) for each in zip(*(train_raw_data_list + test_raw_data_list))]
+    word2idx_dict = _get_word2idx_dict(raw_data)
+    return word2idx_dict
 
 def prepro(args):
     source_dir = args.source_dir
@@ -44,10 +59,13 @@ def prepro(args):
     task = args.task
     is_large = args.large
     dev_ratio = args.dev_ratio
+    share_words = args.share_words
 
     all_tasks = list(map(str, range(1, 21)))
     tasks = all_tasks if task == 'all' else task.split(",")
 
+    if share_words:
+        word2idx_dict = collect_all_words(tasks,source_dir,target_dir,lang,is_large)
     for task in tasks:
         target_parent_dir = os.path.join(target_dir, lang + ("-10k" if is_large else ""), task.zfill(2))
         train_raw_data_list = []
@@ -69,7 +87,9 @@ def prepro(args):
         mode2idxs_dict = {'dev': dev_idxs,
                       'train': train_idxs,
                       'test': test_idxs}
-        word2idx_dict = _get_word2idx_dict(raw_data)
+
+        if not share_words:
+            word2idx_dict = _get_word2idx_dict(raw_data)
         data = _apply_word2idx(word2idx_dict, raw_data)
         if not os.path.exists(target_parent_dir):
             os.makedirs(target_parent_dir)

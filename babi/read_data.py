@@ -56,9 +56,9 @@ class DataSet(object):
 
 def read_data(params, mode, task):
     logging.info("loading {} data for task {}... ".format(mode, task))
-    mid = params.lang + ("-10k" if params.large else "")
-    task_dir = os.path.join(params.data_dir, mid, task.zfill(2))
-    batch_size = params.batch_size
+    mid = params.lang.value + ("-10k" if params.large.value else "")
+    task_dir = os.path.join(params.data_dir.value, mid, task.zfill(2))
+    batch_size = params.batch_size.value
 
     mode2idxs_path = os.path.join(task_dir, "mode2idxs.json")
     data_path = os.path.join(task_dir, "data.json")

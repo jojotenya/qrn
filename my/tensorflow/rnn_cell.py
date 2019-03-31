@@ -53,16 +53,18 @@ class BasicLSTMCell(RNNCell):
         """Long short-term memory cell (GRU)."""
         with tf.variable_scope(name_scope or type(self).__name__):  # "BasicLSTMCell"
             # Parameters of gates are concatenated into one multiply for efficiency.
-            c, h = tf.split(1, 2, state)
+            #c, h = tf.split(1, 2, state)
+            c, h = tf.split(state, 2, 1)
             concat = linear([inputs, h], 4 * self._num_units, True, var_on_cpu=self.var_on_cpu, wd=self.wd)
 
             # i = input_gate, j = new_input, f = forget_gate, o = output_gate
-            i, j, f, o = tf.split(1, 4, concat)
+            #i, j, f, o = tf.split(1, 4, concat)
+            i, j, f, o = tf.split(concat, 4, 1)
 
             new_c = c * tf.sigmoid(f + self._forget_bias) + tf.sigmoid(i) * tf.tanh(j)
             new_h = tf.tanh(new_c) * tf.sigmoid(o)
 
-        return new_h, tf.concat(1, [new_c, new_h])
+        return new_h, tf.concat([new_c, new_h],1)
 
 
 class GRUCell(RNNCell):
@@ -92,8 +94,10 @@ class GRUCell(RNNCell):
             with tf.variable_scope("Gates"):  # Reset gate and update gate.
                 # We start with bias of 1.0 to not reset and not update.
                 state = tf.reshape(state, inputs.get_shape().as_list()[:-1] + state.get_shape().as_list()[-1:])  # explicit shape definition, to use my linaer function
-                r, u = tf.split(1, 2, linear([inputs, state],
-                                                    2 * self._num_units, True, 1.0))
+                #r, u = tf.split(1, 2, linear([inputs, state],
+                #                                    2 * self._num_units, True, 1.0))
+                r, u = tf.split(linear([inputs, state],
+                                                    2 * self._num_units, True, 1.0), 2, 1)
                 r, u = tf.sigmoid(r), tf.sigmoid(u)
             with tf.variable_scope("Candidate"):
                 c = tf.tanh(linear([inputs, r * state], self._num_units, True, var_on_cpu=self.var_on_cpu, wd=self.wd))
@@ -129,8 +133,10 @@ class XGRUCell(RNNCell):
                 # We start with bias of 1.0 to not reset and not update.
                 state = tf.reshape(state, inputs.get_shape().as_list()[:-1] + state.get_shape().as_list()[-1:])
                 a = tf.slice(inputs, [0, 0], [-1, 1])
-                r, u = tf.split(1, 2, linear([tf.slice(inputs, [0, 1], [-1, -1]), state],
-                                             2 * self._num_units, True, 1.0))
+                #r, u = tf.split(1, 2, linear([tf.slice(inputs, [0, 1], [-1, -1]), state],
+                #                             2 * self._num_units, True, 1.0))
+                r, u = tf.split(linear([tf.slice(inputs, [0, 1], [-1, -1]), state],
+                                             2 * self._num_units, True, 1.0), 2, 1)
                 r, u = tf.sigmoid(r), tf.sigmoid(u)
                 u = a * u
             with tf.variable_scope("Candidate"):
@@ -187,11 +193,11 @@ class CRUCell(RNNCell):
 
             with tf.name_scope("Out"):
                 ru_out, _ = self._cell(rf, ru)  # [N, R]
-                a = tf.concat(1, [au, af], name='a')
+                a = tf.concat([au, af], 1, name='a')
                 a_aug = tf.tile(tf.expand_dims(a, 1), [1, C, 1, 1], name='a_aug')
                 au_out = tf.reduce_sum(a_aug * tf.expand_dims(p, -1), 2, name='au_out')  # [N, C, A]
                 au_out_flat = tf.reshape(au_out, [N, C*A], name='au_out_flat')
-                out = tf.concat(1, [ru_out, au_out_flat], name='out')  # [N, R+A*C]
+                out = tf.concat([ru_out, au_out_flat], 1, name='out')  # [N, R+A*C]
         return out, out
 
 
@@ -240,7 +246,10 @@ class RSMCell(BiRNNCell):
         keep_prob = self._keep_prob
         gate_size = self._gate_size
         with tf.variable_scope(scope or "pre"):
-            x, u, _, _ = tf.split(2, 4, tf.slice(inputs, [0, 0, gate_size], [-1, -1, -1]))  # [N, J, d]
+            #tf.split old api (<1.0): tf.split(dimension, num_split, input)
+            #x, u, _, _ = tf.split(2, 4, tf.slice(inputs, [0, 0, gate_size], [-1, -1, -1]))  # [N, J, d]
+            #tf.split new api: tf.split(value, num_split, axis)
+            x, u, _, _ = tf.split(tf.slice(inputs, [0, 0, gate_size], [-1, -1, -1]), 4, 2)  # [N, J, d]
             a_raw = linear([x * u], gate_size, True, scope='a_raw', var_on_cpu=self._var_on_cpu,
                            wd=self._wd, initializer=self._initializer)
             a = tf.sigmoid(a_raw - self._forget_bias, name='a')
@@ -249,7 +258,7 @@ class RSMCell(BiRNNCell):
                 u = tf.cond(is_train, lambda: tf.nn.dropout(u, keep_prob), lambda: u)
             v_t = tf.nn.tanh(linear([x, u], self._num_units, True,
                              var_on_cpu=self._var_on_cpu, wd=self._wd, scope='v_raw'), name='v')
-            new_inputs = tf.concat(2, [a, x, u, v_t])  # [N, J, 3*d + 1]
+            new_inputs = tf.concat([a, x, u, v_t], 2)  # [N, J, 3*d + 1]
         return new_inputs
 
     def __call__(self, inputs, state, scope=None):
@@ -257,9 +266,11 @@ class RSMCell(BiRNNCell):
         with tf.variable_scope(scope or type(self).__name__):  # "RSMCell"
             with tf.name_scope("Split"):  # Reset gate and update gate.
                 a = tf.slice(inputs, [0, 0], [-1, gate_size])
-                x, u, v_t = tf.split(1, 3, tf.slice(inputs, [0, gate_size], [-1, -1]))
+                #x, u, v_t = tf.split(1, 3, tf.slice(inputs, [0, gate_size], [-1, -1]))
+                x, u, v_t = tf.split(tf.slice(inputs, [0, gate_size], [-1, -1]), 3, 1)
                 o = tf.slice(state, [0, 0], [-1, 1])
-                h, v = tf.split(1, 2, tf.slice(state, [0, gate_size], [-1, -1]))
+                #h, v = tf.split(1, 2, tf.slice(state, [0, gate_size], [-1, -1]))
+                h, v = tf.split(tf.slice(state, [0, gate_size], [-1, -1]), 2, 1)
 
             with tf.variable_scope("Main"):
                 r_raw = linear([x * u], 1, True, scope='r_raw', var_on_cpu=self._var_on_cpu,
@@ -271,8 +282,8 @@ class RSMCell(BiRNNCell):
                 new_h = a * g + (1 - a) * h
 
             with tf.name_scope("Concat"):
-                new_state = tf.concat(1, [new_o, new_h, new_v])
-                outputs = tf.concat(1, [a, r, x, new_h, new_v, g])
+                new_state = tf.concat([new_o, new_h, new_v], 1)
+                outputs = tf.concat([a, r, x, new_h, new_v, g], 1)
 
         return outputs, new_state
 
@@ -281,11 +292,13 @@ class RSMCell(BiRNNCell):
         gate_size = self._gate_size
         with tf.name_scope(scope or "post"):
             a = tf.slice(fw_outputs, [0, 0, 0], [-1, -1, gate_size])
-            x, h_fw, v, g_fw = tf.split(2, 4, tf.slice(fw_outputs, [0, 0, 2*gate_size], [-1, -1, -1]))
-            _, h_bw, v, g_bw = tf.split(2, 4, tf.slice(bw_outputs, [0, 0, 2*gate_size], [-1, -1, -1]))
+            #x, h_fw, v, g_fw = tf.split(2, 4, tf.slice(fw_outputs, [0, 0, 2*gate_size], [-1, -1, -1]))
+            #_, h_bw, v, g_bw = tf.split(2, 4, tf.slice(bw_outputs, [0, 0, 2*gate_size], [-1, -1, -1]))
+            x, h_fw, v, g_fw = tf.split(tf.slice(fw_outputs, [0, 0, 2*gate_size], [-1, -1, -1]), 4, 2)
+            _, h_bw, v, g_bw = tf.split(tf.slice(bw_outputs, [0, 0, 2*gate_size], [-1, -1, -1]), 4, 2)
             h = h_fw + h_bw
             g = g_fw + g_bw
-            outputs = tf.concat(2, [a, x, h, v, g])
+            outputs = tf.concat([a, x, h, v, g], 2)
         return outputs
 
 

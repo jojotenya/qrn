@@ -111,16 +111,22 @@ class Tower(BaseTower):
             initializer = tf.random_uniform_initializer(-np.sqrt(3), np.sqrt(3))
             cell = RSMCell(d, forget_bias=forget_bias, wd=wd, initializer=initializer)
             us = tf.tile(tf.expand_dims(u, 1, name='u_prev_aug'), [1, M, 1])  # [N, d] -> [N, M, d]
-            in_ = tf.concat(2, [tf.ones([N, M, 1]), m, us, tf.zeros([N, M, 2*d])], name='x_h_in')  # [N, M, 4*d + 1]
+            in_ = tf.concat([tf.ones([N, M, 1]), m, us, tf.zeros([N, M, 2*d])], 2, name='x_h_in')  # [N, M, 4*d + 1]
             out, fw_state, bw_state, bi_tensors = dynamic_bidirectional_rnn(cell, in_,
                 sequence_length=m_length, dtype='float', num_layers=L)
             a = tf.slice(out, [0, 0, 0], [-1, -1, 1])  # [N, M, 1]
-            _, _, v, g = tf.split(2, 4, tf.slice(out, [0, 0, 1], [-1, -1, -1]))
-            fw_h, fw_v = tf.split(1, 2, tf.slice(fw_state, [0, 1], [-1, -1]))
-            bw_h, bw_v = tf.split(1, 2, tf.slice(bw_state, [0, 1], [-1, -1]))
+            #_, _, v, g = tf.split(2, 4, tf.slice(out, [0, 0, 1], [-1, -1, -1]))
+            #fw_h, fw_v = tf.split(1, 2, tf.slice(fw_state, [0, 1], [-1, -1]))
+            #bw_h, bw_v = tf.split(1, 2, tf.slice(bw_state, [0, 1], [-1, -1]))
 
-            _, fw_u_out, fw_v_out, _ = tf.split(2, 4, tf.squeeze(tf.slice(bi_tensors['fw_out'], [0, L-1, 0, 2], [-1, -1, -1, -1]), [1]))
-            _, bw_u_out, bw_v_out, _ = tf.split(2, 4, tf.squeeze(tf.slice(bi_tensors['bw_out'], [0, L-1, 0, 2], [-1, -1, -1, -1]), [1]))
+            #_, fw_u_out, fw_v_out, _ = tf.split(2, 4, tf.squeeze(tf.slice(bi_tensors['fw_out'], [0, L-1, 0, 2], [-1, -1, -1, -1]), [1]))
+            #_, bw_u_out, bw_v_out, _ = tf.split(2, 4, tf.squeeze(tf.slice(bi_tensors['bw_out'], [0, L-1, 0, 2], [-1, -1, -1, -1]), [1]))
+            _, _, v, g = tf.split(tf.slice(out, [0, 0, 1], [-1, -1, -1]), 4, 2)
+            fw_h, fw_v = tf.split(tf.slice(fw_state, [0, 1], [-1, -1]), 2, 1)
+            bw_h, bw_v = tf.split(tf.slice(bw_state, [0, 1], [-1, -1]), 2, 1)
+
+            _, fw_u_out, fw_v_out, _ = tf.split(tf.squeeze(tf.slice(bi_tensors['fw_out'], [0, L-1, 0, 2], [-1, -1, -1, -1]), [1]), 4, 2)
+            _, bw_u_out, bw_v_out, _ = tf.split(tf.squeeze(tf.slice(bi_tensors['bw_out'], [0, L-1, 0, 2], [-1, -1, -1, -1]), [1]), 4, 2)
 
             tensors['a'] = tf.squeeze(tf.slice(bi_tensors['in'], [0, 0, 0, 0], [-1, -1, -1, 1]), [3])
             tensors['of'] = tf.squeeze(tf.slice(bi_tensors['fw_out'], [0, 0, 0, 1], [-1, -1, -1, 1]), [3])
@@ -145,7 +151,7 @@ class Tower(BaseTower):
 
         with tf.name_scope("loss"):
             with tf.name_scope("ans_loss"):
-                ce = tf.nn.sparse_softmax_cross_entropy_with_logits(logits, y, name='ce')
+                ce = tf.nn.sparse_softmax_cross_entropy_with_logits(logits=logits, labels=y, name='ce')
                 avg_ce = tf.reduce_mean(ce, name='avg_ce')
                 tf.add_to_collection('losses', avg_ce)
 

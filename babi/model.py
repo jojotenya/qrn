@@ -12,12 +12,12 @@ class Embedder(object):
 
 class VariableEmbedder(Embedder):
     def __init__(self, params, wd=0.0, initializer=None, name="variable_embedder"):
-        V, d = params.vocab_size, params.hidden_size
+        V, d = params.vocab_size.value, params.hidden_size.value
         with tf.variable_scope(name):
             self.emb_mat = tf.get_variable("emb_mat", dtype='float', shape=[V, d], initializer=initializer)
             # TODO : not sure wd is appropriate for embedding matrix
             if wd:
-                weight_decay = tf.mul(tf.nn.l2_loss(self.emb_mat), wd, name='weight_loss')
+                weight_decay = tf.multiply(tf.nn.l2_loss(self.emb_mat), wd, name='weight_loss')
                 tf.add_to_collection('losses', weight_decay)
 
     def __call__(self, word, name="embedded_content"):
@@ -90,10 +90,10 @@ class ReductionLayer(object):
             L = tf.tile(tf.expand_dims(L, 0), [N, 1, 1])
             sL = tf.tile(tf.expand_dims(sL, 0), [N, 1, 1])
             logb = tf.log(b + 1e-9)
-            logb = tf.concat(1, [tf.zeros([N, 1, 1]), tf.slice(logb, [0, 1, 0], [-1, -1, -1])])
-            left = L * tf.exp(tf.batch_matmul(L, logb * sL))  # [N, M, M]
+            logb = tf.concat([tf.zeros([N, 1, 1]), tf.slice(logb, [0, 1, 0], [-1, -1, -1])], 1)
+            left = L * tf.exp(tf.matmul(L, logb * sL))  # [N, M, M]
             right = a * u_t  # [N, M, d]
-            u = tf.batch_matmul(left, right)  # [N, M, d]
+            u = tf.matmul(left, right)  # [N, M, d]
         return u
 
 
@@ -121,12 +121,12 @@ class VectorReductionLayer(object):
             L = tf.tile(tf.expand_dims(tf.expand_dims(L, 0), 0), [N, d, 1, 1])
             sL = tf.tile(tf.expand_dims(tf.expand_dims(sL, 0), 0), [N, d, 1, 1])
             logb = tf.log(b + 1e-9)  # [N, M, d]
-            logb = tf.concat(1, [tf.zeros([N, 1, d]), tf.slice(logb, [0, 1, 0], [-1, -1, -1])])  # [N, M, d]
+            logb = tf.concat([tf.zeros([N, 1, d]), tf.slice(logb, [0, 1, 0], [-1, -1, -1])], 1)  # [N, M, d]
             logb = tf.expand_dims(tf.transpose(logb, [0, 2, 1]), -1)  # [N, d, M, 1]
-            left = L * tf.exp(tf.batch_matmul(L, logb * sL))  # [N, d, M, M]
+            left = L * tf.exp(tf.matmul(L, logb * sL))  # [N, d, M, M]
             right = a * u_t  # [N, M, d]
             right = tf.expand_dims(tf.transpose(right, [0, 2, 1]), -1)  # [N, d, M, 1]
-            u = tf.batch_matmul(left, right)  # [N, d, M, 1]
+            u = tf.matmul(left, right)  # [N, d, M, 1]
             u = tf.transpose(tf.squeeze(u, [3]), [0, 2, 1])  # [N, M, d]
         return u
 
@@ -137,12 +137,12 @@ class Tower(BaseTower):
         placeholders = self.placeholders
         tensors = self.tensors
         variables_dict = self.variables_dict
-        N, J, V, Q, M = params.batch_size, params.max_sent_size, params.vocab_size, params.max_ques_size, params.mem_size
-        d = params.hidden_size
-        L = params.mem_num_layers
-        att_forget_bias = params.att_forget_bias
-        use_vector_gate = params.use_vector_gate
-        wd = params.wd
+        N, J, V, Q, M = params.batch_size.value, params.max_sent_size.value, params.vocab_size.value, params.max_ques_size.value, params.mem_size.value
+        d = params.hidden_size.value
+        L = params.mem_num_layers.value
+        att_forget_bias = params.att_forget_bias.value
+        use_vector_gate = params.use_vector_gate.value
+        wd = params.wd.value
         initializer = tf.random_uniform_initializer(-np.sqrt(3), np.sqrt(3))
         with tf.name_scope("placeholders"):
             x = tf.placeholder('int32', shape=[N, M, J], name='x')
@@ -184,9 +184,11 @@ class Tower(BaseTower):
                     a = tf.cast(gate_mask, 'float') * tf.sigmoid(linear([prev_u * m], gate_size, True, initializer=initializer, wd=wd, scope='a') - att_forget_bias)
                     h = reg_layer(u_t, a, 1.0-a, scope='h')
                     if layer_idx + 1 < L:
-                        if params.use_reset:
-                            rf, rb = tf.split(2, 2, tf.cast(gate_mask, 'float') *
-                                tf.sigmoid(linear([prev_u * m], 2 * gate_size, True, initializer=initializer, wd=wd, scope='r')))
+                        if params.use_reset.value:
+                            #rf, rb = tf.split(2, 2, tf.cast(gate_mask, 'float') *
+                            #    tf.sigmoid(linear([prev_u * m], 2 * gate_size, True, initializer=initializer, wd=wd, scope='r')))
+                            rf, rb = tf.split(tf.cast(gate_mask, 'float') *
+                                tf.sigmoid(linear([prev_u * m], 2 * gate_size, True, initializer=initializer, wd=wd, scope='r')), 2, 2)
                         else:
                             rf = rb = tf.ones(a.get_shape().as_list())
                         u_t_rev = tf.reverse_sequence(u_t, m_length, 1)
@@ -205,16 +207,16 @@ class Tower(BaseTower):
 
             h_last = tf.squeeze(tf.slice(h, [0, M-1, 0], [-1, -1, -1]), [1])  # [N, d]
             hs_last = [tf.squeeze(tf.slice(each, [0, M-1, 0], [-1, -1, -1]), [1]) for each in hs]
-            a = tf.transpose(tf.pack(as_, name='a'), [1, 0, 2, 3])
-            rf = tf.transpose(tf.pack(rfs, name='rf'), [1, 0, 2, 3])
-            rb = tf.transpose(tf.pack(rbs, name='rb'), [1, 0, 2, 3])
+            a = tf.transpose(tf.stack(as_, name='a'), [1, 0, 2, 3])
+            rf = tf.transpose(tf.stack(rfs, name='rf'), [1, 0, 2, 3])
+            rb = tf.transpose(tf.stack(rbs, name='rb'), [1, 0, 2, 3])
             tensors['a'] = a
             tensors['rf'] = rf
             tensors['rb'] = rb
 
         with tf.variable_scope("class"):
-            class_mode = params.class_mode
-            use_class_bias = params.use_class_bias
+            class_mode = params.class_mode.value
+            use_class_bias = params.use_class_bias.value
             if class_mode == 'h':
                 # W = tf.transpose(A.emb_mat, name='W')
                 logits = linear([h_last], V, use_class_bias, wd=wd)
@@ -233,7 +235,7 @@ class Tower(BaseTower):
 
         with tf.name_scope("loss"):
             with tf.name_scope("ans_loss"):
-                ce = tf.nn.sparse_softmax_cross_entropy_with_logits(logits, y, name='ce')
+                ce = tf.nn.sparse_softmax_cross_entropy_with_logits(logits=logits, labels=y, name='ce')
                 avg_ce = tf.reduce_mean(ce, name='avg_ce')
                 tf.add_to_collection('losses', avg_ce)
 
@@ -245,7 +247,7 @@ class Tower(BaseTower):
 
     def get_feed_dict(self, batch, mode, **kwargs):
         params = self.params
-        N, J, V, M = params.batch_size, params.max_sent_size, params.vocab_size, params.mem_size
+        N, J, V, M = params.batch_size.value, params.max_sent_size.value, params.vocab_size.value, params.mem_size.value
         x = np.zeros([N, M, J], dtype='int32')
         x_mask = np.zeros([N, M, J], dtype='bool')
         q = np.zeros([N, J], dtype='int32')
