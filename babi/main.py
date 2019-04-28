@@ -9,6 +9,7 @@ import tensorflow as tf
 from babi.model import Tower, Runner
 from config.get_config import get_config_from_file, get_config
 from babi.read_data import read_data
+from my.utils import logger
 
 flags = tf.app.flags
 
@@ -28,12 +29,13 @@ flags.DEFINE_float("init_std", 1.0, "Initial weight std [1.0]")
 flags.DEFINE_float("init_lr", 0.5, "Initial learning rate [0.5]")
 flags.DEFINE_integer("lr_anneal_period", 100, "Anneal period [100]")
 flags.DEFINE_float("lr_anneal_ratio", 0.5, "Anneal ratio [0.5")
-flags.DEFINE_integer("num_epochs", 500, "Total number of epochs for training [100]")
+flags.DEFINE_integer("num_epochs", 100, "Total number of epochs for training [100]")
 flags.DEFINE_boolean("reset_epochs", False, "reset epoch variable to 0")
 flags.DEFINE_string("opt", 'adagrad', 'Optimizer: basic | adagrad | adam [basic]')
 flags.DEFINE_float("wd", 0.001, "Weight decay [0.001]")
 flags.DEFINE_integer("max_grad_norm", 0, "Max grad norm. 0 for no clipping [0]")
 flags.DEFINE_float("max_val_loss", 0.0, "Max val loss [0.0]")
+flags.DEFINE_integer("break_at", 3, "break if val loss not decrease in this number")
 
 # Training and testing options
 # These do not directly affect result performance (they affect duration though)
@@ -76,6 +78,14 @@ flags.DEFINE_boolean("use_vector_gate", False, "Use vector gate? [False]")
 flags.DEFINE_boolean("use_res", False, "Use residual connection?")
 flags.DEFINE_boolean("use_dropout",  False, "Use dropout?")
 flags.DEFINE_boolean("use_random", False, "Use random init_lr")
+
+# LLL
+flags.DEFINE_string("lll_type", "None", "ewc | si | mas | None")
+flags.DEFINE_integer("lam", 0, "lambda for LLL")
+flags.DEFINE_string("rnn_grad_strategy", "sum", "last | ave | sum")
+flags.DEFINE_string("omega_decay", "sum", "sum | float between 0 to 1")
+flags.DEFINE_float("epsilon", 1e-3, "for si")
+
 
 # Meta data
 flags.DEFINE_integer("vocab_size", 0, "vocabulary size")
@@ -191,6 +201,9 @@ def main(_):
             # TODO : create config file (.json)
             configs_path = os.path.join(this_dir, "configs_new%s" % FLAGS.config_ext)
             config = get_config_from_file(FLAGS.__flags, configs_path, config_id)
+
+        if config.lll_type.value.lower() == "none" or config.lll_type.value == "":
+            config.lll_type.value = None
         
         if config.task.value == "all":
             tasks = list(map(str, range(1, 21)))
@@ -198,6 +211,9 @@ def main(_):
             tasks = list(map(str, [18,19]))
         elif config.task.value == 'strange' :
             tasks = list(map(str, [4,5]))
+        elif config.task.value == 'all_together' :
+            tasks = ["all"]
+            # data ==> qrn/data/en/all/
         else:
             tasks = [config.task.value]
         for task in tasks:
@@ -273,6 +289,7 @@ def _main(config, num_trials):
             if config.train.value:
                 if config.load.value:
                     runner.load()
+                logger.info("runner.tensors[loss]: %s ==> task(%s) train?%s"%(runner.tensors["loss"],config.task.value,config.train.value))
                 val_loss, val_acc = runner.train(comb_train_ds, config.num_epochs.value, val_data_set=comb_dev_ds,
                                                  num_batches=config.train_num_batches.value,
                                                  val_num_batches=config.val_num_batches.value, eval_ph_names=eval_ph_names)
@@ -301,18 +318,25 @@ def _main(config, num_trials):
 
     if config.which_model.value == 0:
         config.which_model.value = config.task.value
+    elif config.which_model.value == -1:
+        config.which_model.value = "all" 
     if config.write_log.value:
         test_acc_path = os.path.join(config.log_dir.value,"test_acc.csv")
         if os.path.exists(test_acc_path):
             test_acc_log = pd.read_csv(test_acc_path)
-            test_acc_log = test_acc_log.append({"model":config.which_model.value,"acc":test_accs[best_trial_idx]},ignore_index=True)
+            test_acc_log = test_acc_log.append({"model":to_int(config.which_model.value),"acc":test_accs[best_trial_idx]},ignore_index=True)
         else:
-            test_acc_log = pd.DataFrame([{"model":config.which_model.value,"acc":test_accs[best_trial_idx]}])
+            test_acc_log = pd.DataFrame([{"model":to_int(config.which_model.value),"acc":test_accs[best_trial_idx]}])
         test_acc_log = test_acc_log[["model","acc"]]
         test_acc_log.to_csv(test_acc_path,index=False)
 
     return summary
 
+def to_int(x):
+    try:
+        return int(x)
+    except:
+        return x
 
 if __name__ == "__main__":
     tf.app.run()

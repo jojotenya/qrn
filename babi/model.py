@@ -15,6 +15,7 @@ class VariableEmbedder(Embedder):
         V, d = params.vocab_size.value, params.hidden_size.value
         with tf.variable_scope(name):
             self.emb_mat = tf.get_variable("emb_mat", dtype='float', shape=[V, d], initializer=initializer)
+            #print("self.emb_mat: ", self.emb_mat)
             # TODO : not sure wd is appropriate for embedding matrix
             if wd:
                 weight_decay = tf.multiply(tf.nn.l2_loss(self.emb_mat), wd, name='weight_loss')
@@ -38,14 +39,20 @@ class PositionEncoder(object):
     def __call__(self, Ax, mask, scope=None):
         with tf.name_scope(scope or "position_encoder"):
             shape = Ax.get_shape().as_list()
+            #print("shape: ", shape)
             length_dim_index = len(shape) - 2
+            #print("length_dim_index: ",length_dim_index)
             length = tf.reduce_sum(tf.cast(mask, 'float'), length_dim_index)
             length = tf.maximum(length, 1.0)  # masked sentences will have length 0
+            #print("length: ",length)
             length_aug = tf.expand_dims(tf.expand_dims(length, -1), -1)
+            #print("length_aug: ",length_aug)
             # l = self.b + self.w/length_aug
             l = self.b + self.w/self.max_sent_size
             mask_aug = tf.expand_dims(mask, -1)
+            #print("mask_aug: ",mask_aug)
             f = tf.reduce_sum(Ax * l * tf.cast(mask_aug, 'float'), length_dim_index, name='f')  # [N, S, d]
+            #print("f: ",f)
 
             return f
 
@@ -159,9 +166,17 @@ class Tower(BaseTower):
             placeholders['is_train'] = is_train
 
         with tf.variable_scope("embedding"):
+            #def __call__(self, word, name="embedded_content"):
+            #    out = tf.nn.embedding_lookup(self.emb_mat, word, name=name)
             A = VariableEmbedder(params, wd=wd, initializer=initializer, name='A')
+            # q and x are indices; Aq and Ax find words from lookup_table
             Aq = A(q, name='Aq')  # [N, S, J, d]
             Ax = A(x, name='Ax')  # [N, S, J, d]
+            #print("A: ",A)
+            #print("x: ",x)
+            #print("q: ",q)
+            #print("Aq: ",Aq)
+            #print("Ax: ",Ax)
 
         with tf.name_scope("encoding"):
             encoder = PositionEncoder(J, d)
@@ -174,6 +189,7 @@ class Tower(BaseTower):
             m_length = tf.reduce_sum(m_mask, 1, name='m_length')  # [N]
             prev_u = tf.tile(tf.expand_dims(u, 1), [1, M, 1])  # [N, M, d]
             reg_layer = VectorReductionLayer(N, M, d) if use_vector_gate else ReductionLayer(N, M, d)
+            #print("reg_layer: ",reg_layer)
             gate_size = d if use_vector_gate else 1
             h = None  # [N, M, d]
             as_, rfs, rbs = [], [], []
@@ -228,19 +244,31 @@ class Tower(BaseTower):
                 logits = linear(sum(hs_last), V, use_class_bias, wd=wd)
             else:
                 raise Exception("Invalid class mode: {}".format(class_mode))
+            #print('logits: ',logits)
             yp = tf.cast(tf.argmax(logits, 1), 'int32')
+            #print('yp: ',yp)
             correct = tf.equal(yp, y)
+            #print('correct: ',correct)
+            tensors['logits'] = logits
+            tensors['probs'] = tf.nn.softmax(logits) 
             tensors['yp'] = yp
             tensors['correct'] = correct
 
         with tf.name_scope("loss"):
             with tf.name_scope("ans_loss"):
                 ce = tf.nn.sparse_softmax_cross_entropy_with_logits(logits=logits, labels=y, name='ce')
+                #print("ce: ",ce)
                 avg_ce = tf.reduce_mean(ce, name='avg_ce')
+                #print("avg_ce: ",avg_ce)
                 tf.add_to_collection('losses', avg_ce)
 
             losses = tf.get_collection('losses')
+            #print("losses: ",losses)
             loss = tf.add_n(losses, name='loss')
+
+            # fix
+            #self.vars['unreg_grads'] = tf.gradients(self.initial_loss, params)
+            #print("losses: ",losses)
             tensors['loss'] = loss
 
         variables_dict['all'] = tf.trainable_variables()
