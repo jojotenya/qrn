@@ -41,7 +41,6 @@ class BaseRunner(object):
         self.Fishers = []
         #self.Fishers_prev = []
         self.lam = params.lam.value 
-        self.lll_counts = 0
         self.lll_type = params.lll_type.value
         self.omega_decay = params.omega_decay.value
         try:
@@ -54,6 +53,11 @@ class BaseRunner(object):
         self.step_ops = []
         if self.lll_type in lll_types:
             self.protocol_tensors = get_protocol_tensors(PROTOCOLS[self.lll_type]) 
+        self.protocol_name, self.protocol = PROTOCOLS[self.lll_type](self.omega_decay,self.epsilon) if self.lll_type else (None,None)
+        self.test_step_ops = [] 
+        self.test_task_ops = [] 
+        self.test_step_update = params.test_step_update.value 
+        self.test_task_update = params.test_task_update.value 
 
     def initialize(self):
         params = self.params
@@ -92,6 +96,7 @@ class BaseRunner(object):
             raise Exception()
 
         grads_pairs_dict = defaultdict(list)
+        grads_pairs_dict = defaultdict(list)
         correct_tensors = []
         loss_tensors = []
         with tf.variable_scope("towers"):
@@ -113,9 +118,10 @@ class BaseRunner(object):
                     self.tensors["variables"] = tower.variables_dict["all"]
                     self.variables_len = len(self.tensors["variables"])
 
-                    # fix
+        # init_steps 
         if self.lll_type == "ewc":
             self.Fishers = [np.zeros(v.get_shape().as_list()) for v in tower.variables_dict["all"]]
+            self.tensors["lll_counts"] = 0
         else:
             if self.lll_type in lll_types:
                 for t in self.protocol_tensors:
@@ -125,6 +131,11 @@ class BaseRunner(object):
                 if self.lll_type == "si":
                     #self.tensors["delta"] = [np.zeros(v.get_shape().as_list()) for v in tower.variables_dict["all"]]
                     self.tensors["previous_vars"] = self.clone_vars("previous_vars")
+                elif self.lll_type == "mas":
+                    l2_grads = tf.gradients(tf.norm(tower.tensors["logits"]), self.tensors["variables"])
+                    self.tensors["l2_grads"] = l2_grads
+                    self.tensors["lll_counts"] = 0
+
 
         with tf.name_scope("gpu_sync"):
             loss_tensor = tf.reduce_mean(tf.stack(loss_tensors), 0, name='loss')
@@ -171,6 +182,7 @@ class BaseRunner(object):
         if self.write_log:
             self.writer = tf.summary.FileWriter(params.log_dir.value, sess.graph)
         self.initialized = True
+
         if self.lll_type == 'si':
             self.star()
 
@@ -257,8 +269,8 @@ class BaseRunner(object):
             #Fishers[v] += np.square(ders[v])
             Fishers.append(d)
         np.save(os.path.join("tmp","%s.npy"%(str(int(time.time())))),Fishers)
-        self.lll_counts += 1
-        #self.lll_counts += 1*params.batch_size.value
+        self.tensors["lll_counts"] += 1 
+        #self.tensors["lll_counts"] += 1*params.batch_size.value
         #del class_inds 
         #del class_inds_ 
         #del Fishers
@@ -285,7 +297,7 @@ class BaseRunner(object):
         writer = self.writer
         params = self.params
         progress = params.progress.value
-        protocol_name, protocol = PROTOCOLS[self.lll_type](self.omega_decay,self.epsilon) if self.lll_type else (None,None) 
+        protocol = self.protocol
         # step updates
         if protocol and "step_updates" in protocol:
             # make sure doing lll
@@ -346,7 +358,7 @@ class BaseRunner(object):
                 #    #p = Process(target=self.compute_Fishers, args = (batches,train_args))
                 #    #p.start()
                 #    #p.join()
-                #    self.lll_counts +=1
+                #    self.tensors["lll_counts"] += 1 
 
             #collected = gc.collect()
             #print ("Garbage collector: collected %d objects." % (collected))
@@ -413,16 +425,16 @@ class BaseRunner(object):
                     self.Fishers[v] += np.square(fisher[v])
                     #self.Fishers[v] += fisher[v]
             for v in range(len(self.Fishers)):
-                self.Fishers[v] /= self.lll_counts 
+                self.Fishers[v] /= self.tensors["lll_counts"] 
             # plus Fishers_prev
             #if len(self.Fishers_prev) > 0:
             #    logger.info("len(self.Fishers_prev) > 0 ==> task(%s) train?%s"%(self.params.task.value,self.params.train.value))
             #    for v in range(len(self.Fishers)):
             #        self.Fishers[v] += self.Fishers_prev[v] 
             np.save(os.path.join("previous_tensors","omega.npy"),self.Fishers)
-            self.lll_counts = 0
+            self.tensors["lll_counts"] = 0
 
-        else:
+        elif self.lll_type in lll_types:
             sess.run(self.task_ops)
             omega_vals = [t.eval(sess) for t in self.tensors["omega"]]
             np.save(os.path.join("previous_tensors","omega.npy"),omega_vals)
@@ -444,6 +456,36 @@ class BaseRunner(object):
             df.to_csv(os.path.join(self.params.log_dir.value,"val_acc.csv"),index=False)
 
         return best_val_loss, best_val_acc
+
+    def test(self, data_set, eval_tensor_names=(), eval_ph_names=(), num_batches=None):
+        # test step updates
+        if self.protocol and "test_step_updates" in self.protocol:
+            # make sure doing lll
+            assert self.lll_type in lll_types 
+            #self.test_step_update = True
+            self.test_step_ops = []
+            test_step_updates = OrderedDict(self.protocol["test_step_updates"])
+            for name, func in test_step_updates.items():
+                for i in range(self.variables_len):  
+                    step_op = func(self.tensors,i,self.tensors[name][i])
+                    step_op = tf.assign(self.tensors[name][i],step_op) 
+                    self.test_step_ops.append(step_op)
+
+        # test task updates
+        if self.protocol and "test_task_updates" in self.protocol:
+            # make sure doing lll
+            assert self.lll_type in lll_types 
+            #self.test_task_update = True
+            self.test_task_ops = []
+            test_task_updates = OrderedDict(self.protocol["test_task_updates"])
+            for name, func in test_task_updates.items():
+                #task_op = list(map(lambda v,pv: func(self.tensors,v,pv),range(self.variables_len),self.tensors[name]))
+                for i in range(self.variables_len):  
+                    task_op = func(self.tensors,i,self.tensors[name][i])
+                    task_op = tf.assign(self.tensors[name][i],task_op) 
+                    self.test_task_ops.append(task_op)
+        return self.eval(data_set, eval_tensor_names, eval_ph_names, num_batches)
+        
 
     def eval(self, data_set, eval_tensor_names=(), eval_ph_names=(), num_batches=None):
         # TODO : eval_ph_names
@@ -484,6 +526,9 @@ class BaseRunner(object):
             if progress:
                 pbar.update(iter_idx)
 
+            if self.test_step_update:
+                feed_dict = self._get_feed_dict(batches, 'eval', **eval_args)
+                sess.run(self.test_step_ops,feed_dict=feed_dict)
             #self.compute_Fishers(batches,eval_args)
 
         if progress:
@@ -503,6 +548,9 @@ class BaseRunner(object):
             out = {'ids': ids, 'values': values}
             eval_path = os.path.join(params.eval_dir.value, "%s_%s.json" % (data_set.name, str(epoch).zfill(4)))
             json.dump(out, open(eval_path, 'w'))
+
+        if self.test_task_update:
+            sess.run(self.test_task_ops)
         return loss, acc
 
     def update_fishers_at_the_end(self, data_set, num_batches=None):
@@ -635,8 +683,8 @@ class BaseRunner(object):
             self.update_loss(self.lam)
         if params.reset_epochs.value:
             epoch_op = self.tensors['epoch']
-            assign_op = epoch_op.assign(0)
-            sess.run(assign_op)
+            global_step_op = self.tensors['global_step']
+            sess.run([epoch_op.assign(0),global_step_op.assign(0)])
         logging.info("loading done.")
 
 

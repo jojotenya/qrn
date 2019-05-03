@@ -244,11 +244,8 @@ class Tower(BaseTower):
                 logits = linear(sum(hs_last), V, use_class_bias, wd=wd)
             else:
                 raise Exception("Invalid class mode: {}".format(class_mode))
-            #print('logits: ',logits)
             yp = tf.cast(tf.argmax(logits, 1), 'int32')
-            #print('yp: ',yp)
             correct = tf.equal(yp, y)
-            #print('correct: ',correct)
             tensors['logits'] = logits
             tensors['probs'] = tf.nn.softmax(logits) 
             tensors['yp'] = yp
@@ -257,18 +254,11 @@ class Tower(BaseTower):
         with tf.name_scope("loss"):
             with tf.name_scope("ans_loss"):
                 ce = tf.nn.sparse_softmax_cross_entropy_with_logits(logits=logits, labels=y, name='ce')
-                #print("ce: ",ce)
                 avg_ce = tf.reduce_mean(ce, name='avg_ce')
-                #print("avg_ce: ",avg_ce)
                 tf.add_to_collection('losses', avg_ce)
 
             losses = tf.get_collection('losses')
-            #print("losses: ",losses)
             loss = tf.add_n(losses, name='loss')
-
-            # fix
-            #self.vars['unreg_grads'] = tf.gradients(self.initial_loss, params)
-            #print("losses: ",losses)
             tensors['loss'] = loss
 
         variables_dict['all'] = tf.trainable_variables()

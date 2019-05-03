@@ -9,7 +9,7 @@ import tensorflow as tf
 from babi.model import Tower, Runner
 from config.get_config import get_config_from_file, get_config
 from babi.read_data import read_data
-from my.utils import logger
+from my.utils import logger, lll_types
 
 flags = tf.app.flags
 
@@ -85,6 +85,8 @@ flags.DEFINE_integer("lam", 0, "lambda for LLL")
 flags.DEFINE_string("rnn_grad_strategy", "sum", "last | ave | sum")
 flags.DEFINE_string("omega_decay", "sum", "sum | float between 0 to 1")
 flags.DEFINE_float("epsilon", 1e-3, "for si")
+flags.DEFINE_boolean("test_step_update", False, "for mas")
+flags.DEFINE_boolean("test_task_update", False, "for mas")
 
 
 # Meta data
@@ -297,8 +299,12 @@ def _main(config, num_trials):
                 val_accs.append(val_acc)
             else:
                 runner.load()
-            test_loss, test_acc = runner.eval(comb_test_ds, eval_tensor_names=eval_tensor_names,
-                                   num_batches=config.test_num_batches.value, eval_ph_names=eval_ph_names)
+
+            #test_loss, test_acc = runner.eval(comb_test_ds, 
+            test_loss, test_acc = runner.test(comb_test_ds, 
+                    eval_tensor_names=eval_tensor_names,
+                    num_batches=config.test_num_batches.value, 
+                    eval_ph_names=eval_ph_names)
             test_accs.append(test_acc)
 
         if config.train.value:
