@@ -121,7 +121,7 @@ class BaseRunner(object):
         # init_steps 
         if self.lll_type == "ewc":
             self.Fishers = [np.zeros(v.get_shape().as_list()) for v in tower.variables_dict["all"]]
-            self.tensors["lll_counts"] = 0
+            self.tensors["lll_counts"] = tf.get_variable('lll_counts', shape=[], dtype='float32',initializer=tf.constant_initializer(0), trainable=False)
         else:
             if self.lll_type in lll_types:
                 for t in self.protocol_tensors:
@@ -134,7 +134,7 @@ class BaseRunner(object):
                 elif self.lll_type == "mas":
                     l2_grads = tf.gradients(tf.norm(tower.tensors["logits"]), self.tensors["variables"])
                     self.tensors["l2_grads"] = l2_grads
-                    self.tensors["lll_counts"] = 0
+                    self.tensors["lll_counts"] = tf.get_variable('lll_counts', shape=[], dtype='float32',initializer=tf.constant_initializer(0), trainable=False)
 
 
         with tf.name_scope("gpu_sync"):
@@ -269,7 +269,8 @@ class BaseRunner(object):
             #Fishers[v] += np.square(ders[v])
             Fishers.append(d)
         np.save(os.path.join("tmp","%s.npy"%(str(int(time.time())))),Fishers)
-        self.tensors["lll_counts"] += 1 
+        sess.run(tf.assign_add(self.tensors["lll_counts"],1))
+
         #self.tensors["lll_counts"] += 1*params.batch_size.value
         #del class_inds 
         #del class_inds_ 
@@ -432,7 +433,7 @@ class BaseRunner(object):
             #    for v in range(len(self.Fishers)):
             #        self.Fishers[v] += self.Fishers_prev[v] 
             np.save(os.path.join("previous_tensors","omega.npy"),self.Fishers)
-            self.tensors["lll_counts"] = 0
+            #self.tensors["lll_counts"] = 0
 
         elif self.lll_type in lll_types:
             sess.run(self.task_ops)
@@ -526,9 +527,10 @@ class BaseRunner(object):
             if progress:
                 pbar.update(iter_idx)
 
-            if self.test_step_update:
+            if self.test_step_update and len(self.test_step_ops) > 0:
                 feed_dict = self._get_feed_dict(batches, 'eval', **eval_args)
                 sess.run(self.test_step_ops,feed_dict=feed_dict)
+                sess.run(tf.assign_add(self.tensors["lll_counts"],1))
             #self.compute_Fishers(batches,eval_args)
 
         if progress:
@@ -549,8 +551,11 @@ class BaseRunner(object):
             eval_path = os.path.join(params.eval_dir.value, "%s_%s.json" % (data_set.name, str(epoch).zfill(4)))
             json.dump(out, open(eval_path, 'w'))
 
-        if self.test_task_update:
+        if self.test_task_update and len(self.test_task_ops) > 0:
             sess.run(self.test_task_ops)
+            omega_vals = [t.eval(sess) for t in self.tensors["omega"]]
+            np.save(os.path.join("previous_tensors","omega.npy"),omega_vals)
+
         return loss, acc
 
     def update_fishers_at_the_end(self, data_set, num_batches=None):

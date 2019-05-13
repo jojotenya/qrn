@@ -34,6 +34,8 @@ def get_args():
     parser.add_argument("--large", type=bool_, default=False)
     parser.add_argument("--dev_ratio", type=float, default=0.1)
     parser.add_argument("--share_words", type=bool_, default=False)
+    parser.add_argument("--load_words", default="")
+    parser.add_argument("--dump_all_together", type=bool_, default=False)
     args = parser.parse_args()
     return args
 
@@ -52,20 +54,13 @@ def collect_all_words(tasks,source_dir,target_dir,lang,is_large):
     word2idx_dict = _get_word2idx_dict(raw_data)
     return word2idx_dict
 
-def prepro(args):
-    source_dir = args.source_dir
-    target_dir = args.target_dir
-    lang = args.lang
-    task = args.task
-    is_large = args.large
-    dev_ratio = args.dev_ratio
-    share_words = args.share_words
-
-    all_tasks = list(map(str, range(1, 21)))
-    tasks = all_tasks if task == 'all' else task.split(",")
-
+def make_data(source_dir, target_dir, lang, is_large, dev_ratio, share_words, load_words, tasks):
     if share_words:
-        word2idx_dict = collect_all_words(tasks,source_dir,target_dir,lang,is_large)
+        if load_words:
+            with open(load_words,"r") as f:
+                word2idx_dict = json.load(f)
+        else:
+            word2idx_dict = collect_all_words(tasks,source_dir,target_dir,lang,is_large)
     for task in tasks:
         target_parent_dir = os.path.join(target_dir, lang + ("-10k" if is_large else ""), task.zfill(2))
         train_raw_data_list = []
@@ -96,6 +91,56 @@ def prepro(args):
         _save_data(word2idx_dict, data, target_parent_dir)
         mode2idxs_path = os.path.join(target_parent_dir, "mode2idxs.json")
         with open(mode2idxs_path, 'w') as fh: json.dump(mode2idxs_dict, fh)
+
+
+def make_data_together(source_dir, target_dir, lang, is_large, dev_ratio, tasks):
+    target_parent_dir = os.path.join(target_dir, lang + ("-10k" if is_large else ""), "all")
+    train_raw_data_list = []
+    test_raw_data_list = []
+    train_size, test_size = 0, 0
+    for task in tasks:
+        source_train_path, source_test_path = _get_source_paths(source_dir, lang, is_large, task)
+        train_raw_data_list.append(_get_data(source_train_path, task))
+        test_raw_data_list.append(_get_data(source_test_path, task))
+        train_size += len(train_raw_data_list[-1][0])
+        test_size += len(test_raw_data_list[-1][0])
+
+    raw_data = [list(itertools.chain(*each)) for each in zip(*(train_raw_data_list + test_raw_data_list))]
+    dev_size = int(train_size * dev_ratio)
+    dev_idxs = sorted(random.sample(list(range(train_size)), dev_size))
+    train_idxs = [a for a in range(train_size) if a not in dev_idxs]
+    test_idxs = list(range(train_size, train_size + test_size))
+    
+    mode2idxs_dict = {'dev': dev_idxs,
+                  'train': train_idxs,
+                  'test': test_idxs}
+    
+    word2idx_dict = _get_word2idx_dict(raw_data)
+    data = _apply_word2idx(word2idx_dict, raw_data)
+    if not os.path.exists(target_parent_dir):
+        os.makedirs(target_parent_dir)
+    _save_data(word2idx_dict, data, target_parent_dir)
+    mode2idxs_path = os.path.join(target_parent_dir, "mode2idxs.json")
+    with open(mode2idxs_path, 'w') as fh: json.dump(mode2idxs_dict, fh)
+
+
+def prepro(args):
+    source_dir = args.source_dir
+    target_dir = args.target_dir
+    lang = args.lang
+    task = args.task
+    is_large = args.large
+    dev_ratio = args.dev_ratio
+    share_words = args.share_words
+    load_words = args.load_words
+    dump_all_together = args.dump_all_together
+
+    all_tasks = list(map(str, range(1, 21)))
+    tasks = all_tasks if task == 'all' else task.split(",")
+    if dump_all_together:
+        make_data_together(source_dir, target_dir, lang, is_large, dev_ratio, tasks)
+    else:
+        make_data(source_dir, target_dir, lang, is_large, dev_ratio, share_words, load_words, tasks)
 
 
 def _apply_word2idx(word2idx_dict, raw_data):

@@ -71,17 +71,17 @@ MAS_PROTOCOL = lambda omega_decay,epsilon: (
         ],
         "test_step_updates": [
             ("l2_grads_accum", lambda tensors, var, prev_val:\
-                tensors["l2_grads"][var] + prev_val
+                tf.abs(tensors["l2_grads"][var]) + prev_val
             ),
         ],
         "test_task_updates": [
             ("omega", lambda tensors, var, prev_val:\
-                tf.nn.relu(\
+                #tf.nn.relu(\
                   ema(omega_decay,\
                       prev_val,\
                       tensors["l2_grads_accum"][var]/tensors["lll_counts"]+epsilon
                   ) 
-                ) 
+                #) 
             ),
             #("loss_accum", lambda tensors, var, prev_val:\
             #    prev_val*0.0
